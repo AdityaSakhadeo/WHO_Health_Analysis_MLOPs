@@ -27,7 +27,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 # Experiment config knobs
 # =========================
 # Change these in code to create a new tracked experiment run.
-DATA_PATH = Path("data/health_indicators.csv")
+DATA_PATH = Path("Data/health_indicators.csv")
 TARGET_COL = "life_expectancy"
 
 # If empty, features are inferred as: all columns except TARGET_COL (and obvious identifiers).

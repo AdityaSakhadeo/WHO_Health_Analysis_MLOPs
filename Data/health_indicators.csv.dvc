@@ -1,0 +1,5 @@
+outs:
+- md5: 855c951db9d0b77466b1d3051735965a
+  size: 1671729
+  hash: md5
+  path: health_indicators.csv

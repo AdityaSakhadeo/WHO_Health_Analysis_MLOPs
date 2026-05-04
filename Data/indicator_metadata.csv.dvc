@@ -1,0 +1,5 @@
+outs:
+- md5: 906465312a99495fb4e85ae148253630
+  size: 5494
+  hash: md5
+  path: indicator_metadata.csv

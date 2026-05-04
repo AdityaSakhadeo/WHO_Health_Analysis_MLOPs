@@ -1,5 +1,4 @@
 # Project data and generated files
-Data/
 artifacts/
 mlruns/
 mlflow.db
