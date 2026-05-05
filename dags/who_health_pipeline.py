@@ -1,19 +1,5 @@
 from __future__ import annotations
 
-"""
-Airflow DAG: ingest -> validate -> train -> evaluate -> register -> deploy
-
-Parameterization:
-- feature_set_name
-- dataset_version
-- model hyperparameters (JSON)
-
-Notes:
-- This DAG assumes the repo is mounted/available to the Airflow worker.
-- Airflow itself is not added to requirements.txt because it is commonly managed via a dedicated
-  Airflow environment/container.
-"""
-
 import json
 from datetime import datetime
 
@@ -27,7 +13,19 @@ from src.orchestration_steps import (
     train_evaluate_step,
     validate_step,
 )
+"""
+Airflow DAG: ingest -> validate -> train -> evaluate -> register -> deploy
 
+Parameterization:
+- feature_set_name
+- dataset_version
+- model hyperparameters (JSON)
+
+Notes:
+- This DAG assumes the repo is mounted/available to the Airflow worker.
+- Airflow itself is not added to requirements.txt because it is commonly managed via a dedicated
+  Airflow environment/container.
+"""
 
 default_args = {"owner": "mlops", "retries": 0}
 
