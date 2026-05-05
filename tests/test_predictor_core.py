@@ -29,4 +29,3 @@ def test_validate_frame_reports_missing_target_and_features() -> None:
     assert rep["n_cols"] == 2
     assert "missing_target:y" in rep["issues"]
     assert "missing_features:['c']" in rep["issues"]
-

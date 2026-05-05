@@ -463,7 +463,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help='Optional JSON dict for RF params (e.g. {"n_estimators": 600, "max_depth": 12}).',
     )
-    p_train.add_argument("--sweep", action="store_true", help="Run a hyperparameter sweep (RandomizedSearchCV).")
+    p_train.add_argument(
+        "--sweep", action="store_true", help="Run a hyperparameter sweep (RandomizedSearchCV)."
+    )
     p_train.add_argument("--sweep-n-iter", type=int, default=15)
     p_train.add_argument("--sweep-cv", type=int, default=3)
 
@@ -531,4 +533,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

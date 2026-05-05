@@ -99,4 +99,3 @@ with DAG(
     deploy = PythonOperator(task_id="deploy", python_callable=deploy_step)
 
     ingest >> validate >> train_eval >> register >> deploy
-

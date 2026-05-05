@@ -72,7 +72,10 @@ def register_step(model_name: str = "who-health-rf") -> dict[str, Any]:
     Placeholder: in real projects you would register the MLflow model artifact to the registry.
     Keeping it minimal here because registry requires an MLflow backend that supports it.
     """
-    return {"registered_model_name": model_name, "status": "skipped (configure MLflow registry backend to enable)"}
+    return {
+        "registered_model_name": model_name,
+        "status": "skipped (configure MLflow registry backend to enable)",
+    }
 
 
 def deploy_step() -> dict[str, Any]:
@@ -80,4 +83,3 @@ def deploy_step() -> dict[str, Any]:
     Placeholder: deploy could mean building a docker image and deploying the FastAPI service.
     """
     return {"status": "skipped (deployment step placeholder)"}
-
