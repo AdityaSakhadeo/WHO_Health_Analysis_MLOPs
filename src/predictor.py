@@ -10,14 +10,17 @@ from typing import Any, Dict, List, Optional
 
 import joblib
 import mlflow
+import mlflow.sklearn
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI
+from matplotlib import pyplot as plt
 from pydantic import BaseModel
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -81,6 +84,19 @@ FEATURES: List[str] = [
 
 # Identifiers we never want as model inputs unless explicitly asked.
 DEFAULT_DROP_COLS = {"country_code", "country_name"}
+
+
+def safe_set_experiment(name: str) -> str:
+    """
+    MLflow raises if an experiment exists but is deleted. In that case we create a new name.
+    Returns the actual experiment name that was activated/created.
+    """
+    exp = mlflow.get_experiment_by_name(name)
+    if exp is not None and getattr(exp, "lifecycle_stage", None) == "deleted":
+        ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
+        name = f"{name}-{ts}"
+    mlflow.set_experiment(name)
+    return name
 
 
 @dataclass(frozen=True)
@@ -159,6 +175,70 @@ def load_frame(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def validate_frame(df: pd.DataFrame, *, target_col: str, feature_cols: List[str]) -> Dict[str, Any]:
+    issues: List[str] = []
+    if target_col not in df.columns:
+        issues.append(f"missing_target:{target_col}")
+    missing_features = [c for c in feature_cols if c not in df.columns]
+    if missing_features:
+        issues.append(f"missing_features:{missing_features}")
+
+    summary: Dict[str, Any] = {
+        "n_rows": int(df.shape[0]),
+        "n_cols": int(df.shape[1]),
+        "issues": issues,
+    }
+    return summary
+
+
+def missingness_summary(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    s = df[cols].isna().mean().sort_values(ascending=False)
+    return pd.DataFrame({"feature": s.index, "missing_frac": s.values})
+
+
+def _get_expanded_feature_names(preprocess: ColumnTransformer) -> List[str]:
+    # sklearn >=1.0 should support get_feature_names_out, but we guard anyway.
+    try:
+        names = list(preprocess.get_feature_names_out())
+        return [str(n) for n in names]
+    except Exception:
+        return []
+
+
+def log_feature_importance_artifacts(pipe: Pipeline, *, out_dir: Path, top_k: int = 25) -> None:
+    preprocess: ColumnTransformer = pipe.named_steps["preprocess"]
+    model: RandomForestRegressor = pipe.named_steps["model"]
+
+    importances = getattr(model, "feature_importances_", None)
+    if importances is None:
+        return
+
+    feat_names = _get_expanded_feature_names(preprocess)
+    if not feat_names or len(feat_names) != len(importances):
+        feat_names = [f"f{i}" for i in range(len(importances))]
+
+    df_imp = pd.DataFrame({"feature": feat_names, "importance": importances}).sort_values(
+        "importance", ascending=False
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = out_dir / "feature_importance.csv"
+    df_imp.to_csv(csv_path, index=False)
+    mlflow.log_artifact(str(csv_path))
+
+    top = df_imp.head(top_k)
+    fig_h = max(4.0, 0.25 * float(len(top)))
+    plt.figure(figsize=(10, fig_h))
+    plt.barh(list(reversed(top["feature"].tolist())), list(reversed(top["importance"].tolist())))
+    plt.xlabel("Importance")
+    plt.title(f"Top {min(top_k, len(df_imp))} Feature Importances")
+    plt.tight_layout()
+    png_path = out_dir / "feature_importance_top.png"
+    plt.savefig(png_path, dpi=160)
+    plt.close()
+    mlflow.log_artifact(str(png_path))
+
+
 def train(
     *,
     data_path: Path,
@@ -169,6 +249,12 @@ def train(
     random_state: int,
     test_size: float,
     output_dir: Path,
+    feature_set_name: str = "default",
+    dataset_version: Optional[str] = None,
+    model_params: Optional[Dict[str, Any]] = None,
+    enable_sweep: bool = False,
+    sweep_n_iter: int = 15,
+    sweep_cv: int = 3,
 ) -> tuple[Path, Dict[str, float]]:
     df = load_frame(data_path)
     if target_col not in df.columns:
@@ -191,17 +277,44 @@ def train(
 
     pipe = build_pipeline(X_train, random_state=random_state)
 
-    mlflow.set_experiment(experiment_name)
+    actual_experiment = safe_set_experiment(experiment_name)
     with mlflow.start_run(run_name=run_name):
         fp = fingerprint_data(data_path)
 
+        if actual_experiment != experiment_name:
+            mlflow.log_param("requested_experiment", experiment_name)
+            mlflow.log_param("actual_experiment", actual_experiment)
+
         mlflow.log_dict(asdict(fp), "data_fingerprint.json")
         mlflow.log_param("data_path", str(data_path.as_posix()))
+        if dataset_version is not None:
+            mlflow.log_param("dataset_version", str(dataset_version))
         mlflow.log_param("target_col", target_col)
         mlflow.log_param("features", json.dumps(feats, ensure_ascii=False))
         mlflow.log_param("n_features", len(feats))
+        mlflow.log_param("feature_set_name", feature_set_name)
         mlflow.log_param("random_state", random_state)
         mlflow.log_param("test_size", test_size)
+        mlflow.log_param("enable_sweep", bool(enable_sweep))
+        mlflow.log_param("sweep_n_iter", int(sweep_n_iter))
+        mlflow.log_param("sweep_cv", int(sweep_cv))
+
+        # data stats
+        mlflow.log_metric("train_rows", float(X_train.shape[0]))
+        mlflow.log_metric("test_rows", float(X_test.shape[0]))
+
+        # basic validation report + missingness summary
+        val = validate_frame(df, target_col=target_col, feature_cols=feats)
+        mlflow.log_dict(val, "validation_report.json")
+
+        miss_df = missingness_summary(work, feats + [target_col])
+        miss_path = output_dir / "missingness_summary.csv"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        miss_df.to_csv(miss_path, index=False)
+        mlflow.log_artifact(str(miss_path))
+
+        if model_params:
+            pipe.named_steps["model"].set_params(**model_params)
 
         model: RandomForestRegressor = pipe.named_steps["model"]
         mlflow.log_params(
@@ -211,15 +324,49 @@ def train(
                 "max_depth": model.max_depth,
                 "min_samples_split": model.min_samples_split,
                 "min_samples_leaf": model.min_samples_leaf,
+                "max_features": model.max_features,
             }
         )
 
-        pipe.fit(X_train, y_train)
+        if enable_sweep:
+            # sweep only the estimator hyperparams; preprocessing stays fixed.
+            search_space = {
+                "model__n_estimators": [200, 400, 800],
+                "model__max_depth": [None, 6, 10, 16, 24],
+                "model__min_samples_split": [2, 5, 10],
+                "model__min_samples_leaf": [1, 2, 4],
+                "model__max_features": ["sqrt", "log2", None],
+            }
+
+            search = RandomizedSearchCV(
+                estimator=pipe,
+                param_distributions=search_space,
+                n_iter=int(sweep_n_iter),
+                cv=int(sweep_cv),
+                scoring="neg_root_mean_squared_error",
+                random_state=random_state,
+                n_jobs=-1,
+                refit=True,
+            )
+            search.fit(X_train, y_train)
+            pipe = search.best_estimator_
+
+            mlflow.log_param("best_params", json.dumps(search.best_params_))
+            mlflow.log_metric("cv_best_neg_rmse", float(search.best_score_))
+
+            cv_path = output_dir / "cv_results.csv"
+            pd.DataFrame(search.cv_results_).to_csv(cv_path, index=False)
+            mlflow.log_artifact(str(cv_path))
+        else:
+            pipe.fit(X_train, y_train)
+
         pred = pipe.predict(X_test)
         metrics = evaluate(y_test, pred)
         mlflow.log_metrics(metrics)
 
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # feature importance (after fit)
+        log_feature_importance_artifacts(pipe, out_dir=output_dir)
+
         model_path = output_dir / "model.joblib"
         joblib.dump(
             {
@@ -228,6 +375,8 @@ def train(
                 "features": feats,
                 "trained_at_utc": datetime.now(tz=timezone.utc).isoformat(),
                 "data_fingerprint": asdict(fp),
+                "feature_set_name": feature_set_name,
+                "dataset_version": dataset_version,
             },
             model_path,
         )
@@ -308,6 +457,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p_train.add_argument("--random-state", type=int, default=42)
     p_train.add_argument("--test-size", type=float, default=0.2)
     p_train.add_argument("--out-dir", type=str, default="artifacts")
+    p_train.add_argument("--feature-set-name", type=str, default="default")
+    p_train.add_argument("--dataset-version", type=str, default=None)
+    p_train.add_argument(
+        "--model-params-json",
+        type=str,
+        default=None,
+        help='Optional JSON dict for RF params (e.g. {"n_estimators": 600, "max_depth": 12}).',
+    )
+    p_train.add_argument("--sweep", action="store_true", help="Run a hyperparameter sweep (RandomizedSearchCV).")
+    p_train.add_argument("--sweep-n-iter", type=int, default=15)
+    p_train.add_argument("--sweep-cv", type=int, default=3)
 
     p_pred = sub.add_parser("predict", help="Predict using a saved model bundle.")
     p_pred.add_argument("--model-path", type=str, required=True)
@@ -334,6 +494,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not data_path.exists():
             raise FileNotFoundError(f"Dataset not found at: {data_path}")
         feats = FEATURES if args.use_code_features else None
+        model_params = json.loads(args.model_params_json) if args.model_params_json else None
         model_path, metrics = train(
             data_path=data_path,
             target_col=args.target,
@@ -343,6 +504,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             random_state=args.random_state,
             test_size=args.test_size,
             output_dir=Path(args.out_dir),
+            feature_set_name=args.feature_set_name,
+            dataset_version=args.dataset_version,
+            model_params=model_params,
+            enable_sweep=bool(args.sweep),
+            sweep_n_iter=int(args.sweep_n_iter),
+            sweep_cv=int(args.sweep_cv),
         )
         print(json.dumps({"model_path": str(model_path.as_posix()), "metrics": metrics}, indent=2))
         return 0
