@@ -4,9 +4,9 @@ import argparse
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import joblib
 import mlflow
@@ -20,11 +20,9 @@ from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import RandomizedSearchCV
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import RandomizedSearchCV, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-
 
 # =========================
 # Experiment config knobs
@@ -35,7 +33,7 @@ TARGET_COL = "life_expectancy"
 
 # If empty, features are inferred as: all columns except TARGET_COL (and obvious identifiers).
 # If you set this list explicitly, it will be logged to MLflow as a param to track changes.
-FEATURES: List[str] = [
+FEATURES: list[str] = [
     # demographics / econ / infra / risk factors (example starter set)
     "population",
     "population_growth",
@@ -93,7 +91,7 @@ def safe_set_experiment(name: str) -> str:
     """
     exp = mlflow.get_experiment_by_name(name)
     if exp is not None and getattr(exp, "lifecycle_stage", None) == "deleted":
-        ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
+        ts = datetime.now(tz=UTC).strftime("%Y%m%d-%H%M%S")
         name = f"{name}-{ts}"
     mlflow.set_experiment(name)
     return name
@@ -121,11 +119,11 @@ def fingerprint_data(path: Path) -> DataFingerprint:
         path=str(path.as_posix()),
         sha256=sha256_file(path),
         bytes=st.st_size,
-        modified_utc=datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+        modified_utc=datetime.fromtimestamp(st.st_mtime, tz=UTC).isoformat(),
     )
 
 
-def infer_features(df: pd.DataFrame, target: str) -> List[str]:
+def infer_features(df: pd.DataFrame, target: str) -> list[str]:
     return [c for c in df.columns if c != target and c not in DEFAULT_DROP_COLS]
 
 
@@ -163,7 +161,7 @@ def build_pipeline(X: pd.DataFrame, *, random_state: int) -> Pipeline:
     return Pipeline(steps=[("preprocess", pre), ("model", model)])
 
 
-def evaluate(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+def evaluate(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     mse = float(mean_squared_error(y_true, y_pred))
     rmse = float(np.sqrt(mse))
     mae = float(mean_absolute_error(y_true, y_pred))
@@ -175,15 +173,15 @@ def load_frame(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def validate_frame(df: pd.DataFrame, *, target_col: str, feature_cols: List[str]) -> Dict[str, Any]:
-    issues: List[str] = []
+def validate_frame(df: pd.DataFrame, *, target_col: str, feature_cols: list[str]) -> dict[str, Any]:
+    issues: list[str] = []
     if target_col not in df.columns:
         issues.append(f"missing_target:{target_col}")
     missing_features = [c for c in feature_cols if c not in df.columns]
     if missing_features:
         issues.append(f"missing_features:{missing_features}")
 
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "n_rows": int(df.shape[0]),
         "n_cols": int(df.shape[1]),
         "issues": issues,
@@ -191,12 +189,12 @@ def validate_frame(df: pd.DataFrame, *, target_col: str, feature_cols: List[str]
     return summary
 
 
-def missingness_summary(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+def missingness_summary(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     s = df[cols].isna().mean().sort_values(ascending=False)
     return pd.DataFrame({"feature": s.index, "missing_frac": s.values})
 
 
-def _get_expanded_feature_names(preprocess: ColumnTransformer) -> List[str]:
+def _get_expanded_feature_names(preprocess: ColumnTransformer) -> list[str]:
     # sklearn >=1.0 should support get_feature_names_out, but we guard anyway.
     try:
         names = list(preprocess.get_feature_names_out())
@@ -243,19 +241,19 @@ def train(
     *,
     data_path: Path,
     target_col: str,
-    features: Optional[List[str]],
+    features: list[str] | None,
     experiment_name: str,
-    run_name: Optional[str],
+    run_name: str | None,
     random_state: int,
     test_size: float,
     output_dir: Path,
     feature_set_name: str = "default",
-    dataset_version: Optional[str] = None,
-    model_params: Optional[Dict[str, Any]] = None,
+    dataset_version: str | None = None,
+    model_params: dict[str, Any] | None = None,
     enable_sweep: bool = False,
     sweep_n_iter: int = 15,
     sweep_cv: int = 3,
-) -> tuple[Path, Dict[str, float]]:
+) -> tuple[Path, dict[str, float]]:
     df = load_frame(data_path)
     if target_col not in df.columns:
         raise ValueError(f"Target column '{target_col}' not found in dataset.")
@@ -373,7 +371,7 @@ def train(
                 "pipeline": pipe,
                 "target_col": target_col,
                 "features": feats,
-                "trained_at_utc": datetime.now(tz=timezone.utc).isoformat(),
+                "trained_at_utc": datetime.now(tz=UTC).isoformat(),
                 "data_fingerprint": asdict(fp),
                 "feature_set_name": feature_set_name,
                 "dataset_version": dataset_version,
@@ -391,16 +389,16 @@ def train(
         return model_path, metrics
 
 
-def load_model_bundle(model_path: Path) -> Dict[str, Any]:
+def load_model_bundle(model_path: Path) -> dict[str, Any]:
     bundle = joblib.load(model_path)
     if not isinstance(bundle, dict) or "pipeline" not in bundle:
         raise ValueError("Invalid model bundle. Expected a dict with key 'pipeline'.")
     return bundle
 
 
-def predict_one(model_bundle: Dict[str, Any], payload: Dict[str, Any]) -> float:
+def predict_one(model_bundle: dict[str, Any], payload: dict[str, Any]) -> float:
     pipe: Pipeline = model_bundle["pipeline"]
-    feats: List[str] = model_bundle["features"]
+    feats: list[str] = model_bundle["features"]
     X = pd.DataFrame([{k: payload.get(k, None) for k in feats}])
     pred = pipe.predict(X)
     return float(pred[0])
@@ -410,17 +408,17 @@ def make_app(model_path: Path) -> FastAPI:
     bundle = load_model_bundle(model_path)
 
     class PredictRequest(BaseModel):
-        data: Dict[str, Any]
+        data: dict[str, Any]
 
     class PredictResponse(BaseModel):
         prediction: float
         target: str
-        features: List[str]
+        features: list[str]
 
     app = FastAPI(title="WHO Health Predictor", version="1.0")
 
     @app.get("/health")
-    def health() -> Dict[str, Any]:
+    def health() -> dict[str, Any]:
         return {
             "status": "ok",
             "model_path": str(model_path.as_posix()),
@@ -440,7 +438,7 @@ def make_app(model_path: Path) -> FastAPI:
     return app
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="WHO health predictor with MLflow tracking.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -486,7 +484,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     if args.cmd == "train":
