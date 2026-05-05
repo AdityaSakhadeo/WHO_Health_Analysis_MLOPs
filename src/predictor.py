@@ -14,6 +14,7 @@ import mlflow.sklearn
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 from matplotlib import pyplot as plt
 from pydantic import BaseModel
 from sklearn.compose import ColumnTransformer
@@ -434,6 +435,8 @@ def make_app(model_path: Path) -> FastAPI:
             target=str(bundle.get("target_col")),
             features=list(bundle.get("features", [])),
         )
+
+    Instrumentator().instrument(app).expose(app)
 
     return app
 
