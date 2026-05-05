@@ -14,7 +14,9 @@ import mlflow.sklearn
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 from matplotlib import pyplot as plt
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
@@ -82,6 +84,17 @@ FEATURES: list[str] = [
 
 # Identifiers we never want as model inputs unless explicitly asked.
 DEFAULT_DROP_COLS = {"country_code", "country_name"}
+
+REQUEST_COUNT = Counter(
+    "who_health_http_requests_total",
+    "Total HTTP requests served by WHO Health Predictor",
+    ["method", "path", "status_code"],
+)
+REQUEST_LATENCY_SECONDS = Histogram(
+    "who_health_http_request_duration_seconds",
+    "HTTP request latency in seconds for WHO Health Predictor",
+    ["method", "path"],
+)
 
 
 def safe_set_experiment(name: str) -> str:
@@ -417,6 +430,25 @@ def make_app(model_path: Path) -> FastAPI:
 
     app = FastAPI(title="WHO Health Predictor", version="1.0")
 
+    @app.middleware("http")
+    async def metrics_middleware(request, call_next):  # type: ignore[no-untyped-def]
+        method = request.method
+        path = request.url.path
+        timer = REQUEST_LATENCY_SECONDS.labels(method=method, path=path).time()
+        timer.__enter__()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            timer.__exit__(None, None, None)
+            REQUEST_COUNT.labels(
+                method=method,
+                path=path,
+                status_code=str(status_code),
+            ).inc()
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
@@ -434,6 +466,10 @@ def make_app(model_path: Path) -> FastAPI:
             target=str(bundle.get("target_col")),
             features=list(bundle.get("features", [])),
         )
+
+    @app.get("/metrics")
+    def metrics() -> PlainTextResponse:
+        return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return app
 
