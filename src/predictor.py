@@ -14,8 +14,8 @@ import mlflow.sklearn
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI
-from prometheus_fastapi_instrumentator import Instrumentator
 from matplotlib import pyplot as plt
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
