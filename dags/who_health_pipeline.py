@@ -13,6 +13,7 @@ from src.orchestration_steps import (
     train_evaluate_step,
     validate_step,
 )
+
 """
 Airflow DAG: ingest -> validate -> train -> evaluate -> register -> deploy
 
@@ -98,4 +99,3 @@ with DAG(
     deploy = PythonOperator(task_id="deploy", python_callable=deploy_step)
 
     ingest >> validate >> train_eval >> register >> deploy
-
