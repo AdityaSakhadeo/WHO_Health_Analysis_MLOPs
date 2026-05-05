@@ -22,7 +22,9 @@ def ingest_task(data_path: str) -> dict[str, Any]:
 
 @task(name="validate", retries=0)
 def validate_task(data_path: str, target_col: str, use_code_features: bool) -> dict[str, Any]:
-    return validate_step(data_path=data_path, target_col=target_col, use_code_features=use_code_features)
+    return validate_step(
+        data_path=data_path, target_col=target_col, use_code_features=use_code_features
+    )
 
 
 @task(name="train_evaluate", retries=0)
@@ -128,4 +130,3 @@ def who_health_mlops_pipeline(
 
 if __name__ == "__main__":
     who_health_mlops_pipeline()
-
