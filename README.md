@@ -6,6 +6,7 @@ This project predicts life expectancy and includes:
 - DVC for dataset versioning
 - MLflow for experiment tracking
 - Prefect for pipeline orchestration
+- BentoML for model serving
 - GitHub Actions for CI/CD
 - Prometheus + Grafana for runtime API monitoring
 
@@ -52,6 +53,9 @@ Open: `http://127.0.0.1:5000`
 
 ## 4) Run Prefect (pipeline orchestration)
 
+Use `prefect_pipeline.py` as your default execution path for training workflow.
+Manual one-off commands are useful mainly for debugging.
+
 ### Option A: run flow directly
 
 ```bash
@@ -75,33 +79,45 @@ python prefect_pipeline.py
 
 Open: `http://127.0.0.1:4200`
 
-## 5) Train and serve model API
+## 5) Register model in BentoML model store
 
-Train (if needed):
-
-```bash
-python predictor.py train --data-path Data/health_indicators.csv --target life_expectancy --experiment who-health --run-name local_train --out-dir artifacts
-```
-
-Serve API:
+After training completes and `artifacts/model.joblib` is available:
 
 ```bash
-python predictor.py serve --model-path artifacts/model.joblib --host 127.0.0.1 --port 8000
+python register_bento_model.py --model-path artifacts/model.joblib --name who_health_model
 ```
 
-Health check:
+## 6) Serve inference with BentoML endpoint
+
+Start Bento service:
 
 ```bash
-curl http://127.0.0.1:8000/health
+bentoml serve bentoml_service:WhoHealthService --host 127.0.0.1 --port 3000
 ```
 
-Prometheus metrics endpoint:
+Predict request:
 
 ```bash
-curl http://127.0.0.1:8000/metrics
+curl -X POST http://127.0.0.1:3000/predict -H "Content-Type: application/json" -d "{\"gdp_per_capita\":2500,\"region\":\"South Asia\"}"
 ```
 
-## 6) Prometheus setup (without Docker)
+Bento metrics endpoint:
+
+```bash
+curl http://127.0.0.1:3000/metrics
+```
+
+## 7) Run frontend app (input -> prediction)
+
+In a separate terminal:
+
+```bash
+streamlit run frontend_app.py
+```
+
+Open: `http://127.0.0.1:8501`
+
+## 8) Prometheus setup (without Docker)
 
 1. Download Prometheus for Windows from [prometheus.io](https://prometheus.io/download/).
 2. Extract it locally.
@@ -114,18 +130,21 @@ curl http://127.0.0.1:8000/metrics
 
 Open: `http://127.0.0.1:9090`
 
-## 7) Grafana setup (without Docker)
+## 9) Grafana setup (without Docker)
 
 1. Download and install Grafana for Windows from [grafana.com](https://grafana.com/grafana/download).
 2. Start Grafana service/app.
-3. Open `http://127.0.0.1:3000` (default login: `admin` / `admin`).
+3. If BentoML is already using port `3000`, run Grafana on another port such as `3001`, then open that URL (default login: `admin` / `admin`).
 4. Add Prometheus datasource:
    - URL: `http://127.0.0.1:9090`
-5. Build dashboards using these metrics:
-   - `who_health_http_requests_total`
-   - `who_health_http_request_duration_seconds`
+5. Build dashboards from Bento metrics (check exact names at `http://127.0.0.1:3000/metrics`, usually prefixed with `bentoml_`).
+   Typical useful panels:
+   - request count / rate
+   - request duration (p50/p95)
+   - in-flight requests
+   - non-2xx response counts
 
-## 8) GitHub Actions
+## 10) GitHub Actions
 
 Workflows are in `.github/workflows/`:
 
@@ -134,7 +153,7 @@ Workflows are in `.github/workflows/`:
 
 Push to your branch and check Actions tab for pipeline status.
 
-## 9) Local quality checks
+## 11) Local quality checks
 
 ```bash
 ruff check .

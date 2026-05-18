@@ -263,7 +263,7 @@ def train(
     feature_set_name: str = "default",
     dataset_version: str | None = None,
     model_params: dict[str, Any] | None = None,
-    enable_sweep: bool = False,
+    enable_sweep: bool = True,
     sweep_n_iter: int = 15,
     sweep_cv: int = 3,
 ) -> tuple[Path, dict[str, float]]:
